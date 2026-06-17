@@ -693,6 +693,34 @@ class InventoryItemLocationsStream(NetSuiteStream):
     ).to_dict()
 
 
+class ItemLocationConfigurationStream(NetSuiteStream):
+    name = "item_location_configurations"
+    primary_keys = ["id"]
+    table = "itemlocationconfiguration"
+    replication_key = "lastmodifieddate"
+
+    def get_replication_key_conditions(self, context):
+        start_date = self.get_starting_time(context)
+        if not start_date:
+            return None
+
+        time_format = "TO_TIMESTAMP('%Y-%m-%d %H:%M:%S', 'YYYY-MM-DD HH24:MI:SS')"
+        start_date_str = start_date.strftime(time_format)
+
+        # lastmodifieddate is date-granular for item location configurations, so use >=
+        # to avoid missing records changed later on the same day as the saved state.
+        return [f"{self.table}.{self.replication_key}>={start_date_str}"]
+
+    schema = th.PropertiesList(
+        th.Property("id", th.StringType),
+        th.Property("item", th.StringType),
+        th.Property("location", th.StringType),
+        th.Property("lastmodifieddate", th.DateTimeType),
+        th.Property("custrecord_optiply_moq", th.StringType),
+        th.Property("custrecord_optiply_fixed_lot_multiple", th.StringType),
+    ).to_dict()
+
+
 class ProfitLossReportStream(NetSuiteStream):
     name = "profit_loss_report"
     start_date_f = None
