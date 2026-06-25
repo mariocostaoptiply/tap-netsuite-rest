@@ -2190,6 +2190,49 @@ class ItemVendorStream(NetsuiteDynamicStream):
         return super().prepare_request_payload(context, next_page_token)
 
 
+class ItemVendorsFullSyncStream(NetsuiteDynamicStream):
+    """Daily full itemvendor extract used for supplierProduct reconciliation."""
+
+    name = "item_vendors_full_sync"
+    table = "itemvendor"
+
+    def should_run_full_sync(self):
+        hg_last_modified = (self.tap_state or {}).get("hg_last_modified")
+        if not hg_last_modified:
+            self.logger.info("Skipping item_vendors_full_sync: hg_last_modified missing from state")
+            return False
+
+        try:
+            hg_last_modified_date = datetime.strptime(str(hg_last_modified)[:10], "%Y-%m-%d").date()
+        except ValueError:
+            self.logger.warning(
+                "Skipping item_vendors_full_sync: could not parse hg_last_modified=%s",
+                hg_last_modified,
+            )
+            return False
+
+        today = datetime.utcnow().date()
+        should_run = hg_last_modified_date < today
+        if should_run:
+            self.logger.info(
+                "Running item_vendors_full_sync: hg_last_modified date %s is before today %s",
+                hg_last_modified_date,
+                today,
+            )
+        else:
+            self.logger.info(
+                "Skipping item_vendors_full_sync: hg_last_modified date %s is not before today %s",
+                hg_last_modified_date,
+                today,
+            )
+        return should_run
+
+    def request_records(self, context: Optional[dict]) -> Iterable[dict]:
+        if not self.should_run_full_sync():
+            return
+        yield from super().request_records(context)
+
+
 class ItemPriceStream(NetsuiteDynamicStream):
     name = "item_prices"
     table = "itemprice"
