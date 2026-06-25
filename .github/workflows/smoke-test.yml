@@ -4,6 +4,7 @@ on:
   repository_dispatch:
     types: [smoke_test]  # Custom event type
   pull_request:
+    branches: [main]
     types: [opened, synchronize, reopened]
 
 jobs:

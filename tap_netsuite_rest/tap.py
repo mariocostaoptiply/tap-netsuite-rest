@@ -8,6 +8,7 @@ from hotglue_singer_sdk import typing as th  # JSON schema typing helpers
 from hotglue_singer_sdk.helpers.capabilities import AlertingLevel
 
 import inspect 
+import requests
 
 from tap_netsuite_rest import streams
 from tap_netsuite_rest.client_soap import NetsuiteSOAPClient
@@ -55,6 +56,9 @@ class TapNetSuite(Tap):
     name = "tap-netsuite-rest"
     custom_fields = None
     alerting_level = AlertingLevel.ERROR
+    exception_alerting_level_map = {
+        requests.exceptions.ConnectionError: AlertingLevel.NONE,
+    }
 
     config_jsonschema = th.PropertiesList(
         th.Property("ns_account", th.StringType, required=True),
@@ -70,6 +74,12 @@ class TapNetSuite(Tap):
         ),
         th.Property("bill_attachments_restlet_url", th.StringType, description="Base URL for bill attachments Restlet"),
         th.Property("bill_attachments_suitelet_url", th.StringType, description="Base URL for bill attachments Suitelet (file download)"),
+        th.Property(
+            "remove_unauthorized_streams",
+            th.BooleanType,
+            default=True,
+            description="When true, omit streams from catalog discover if a SuiteQL probe against the stream table fails.",
+        ),
     ).to_dict()
 
     def __init__(
@@ -87,8 +97,38 @@ class TapNetSuite(Tap):
     def discover_streams(self) -> List[Stream]:
         """Return a list of discovered streams."""
         streams = streams_to_sync(self, include_streams, ignore_streams)
-        return streams
+        # flag add for test back compatibility also not run probe table during get, only during discover
+        if not self.config.get("remove_unauthorized_streams") or self.input_catalog:
+            return streams
 
+        accessible = []
+        table_access_cache: dict[str, bool] = {}
+
+        for stream in streams:
+            probe_table_name = getattr(stream, "_probe_table_name", None)
+            if probe_table_name is None:
+                accessible.append(stream)
+                continue
+
+            table = probe_table_name()
+            if table is None:
+                accessible.append(stream)
+                continue
+
+            if table not in table_access_cache:
+                self.logger.info("Probing access for table '%s'", table)
+                table_access_cache[table] = stream.probe_table_access(table)
+
+            if table_access_cache[table]:
+                accessible.append(stream)
+            else:
+                self.logger.info(
+                    "Excluding stream '%s' from catalog: no access to table '%s'",
+                    stream.name,
+                    table,
+                )
+
+        return accessible
 
 if __name__ == "__main__":
     TapNetSuite.cli()
