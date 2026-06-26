@@ -2196,6 +2196,7 @@ class ItemVendorsFullSyncStream(NetsuiteDynamicStream):
 
     name = "item_vendors_full_sync"
     table = "itemvendor"
+    order_by = "ORDER BY itemvendor.item, itemvendor.vendor, itemvendor.subsidiary"
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
