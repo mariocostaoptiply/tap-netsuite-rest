@@ -2197,6 +2197,15 @@ class ItemVendorsFullSyncStream(NetsuiteDynamicStream):
     table = "itemvendor"
 
     def should_run_full_sync(self):
+        force_sync_supplier_products = (self.tap_state or {}).get("force_sync_supplier_products", False)
+        if isinstance(force_sync_supplier_products, str):
+            force_sync_supplier_products = force_sync_supplier_products.lower() == "true"
+        if force_sync_supplier_products:
+            self.logger.info(
+                "Running item_vendors_full_sync: force_sync_supplier_products is true in state"
+            )
+            return True
+
         hg_last_modified = (self.tap_state or {}).get("hg_last_modified")
         if not hg_last_modified:
             self.logger.info("Skipping item_vendors_full_sync: hg_last_modified missing from state")
