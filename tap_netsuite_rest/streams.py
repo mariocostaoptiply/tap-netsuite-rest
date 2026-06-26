@@ -1,6 +1,7 @@
 """Stream type classes for tap-netsuite-rest."""
 
 from typing import Any, Dict, Optional, Iterable, Tuple
+from copy import deepcopy
 import uuid
 import requests
 import base64
@@ -2196,42 +2197,59 @@ class ItemVendorsFullSyncStream(NetsuiteDynamicStream):
     name = "item_vendors_full_sync"
     table = "itemvendor"
 
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        # Keep the state as it was when streams were initialized. During a run,
+        # the item bookmark can advance before this stream is executed.
+        self.initial_tap_state = deepcopy(self.tap_state or {})
+
     def should_run_full_sync(self):
-        force_sync_supplier_products = (self.tap_state or {}).get("force_sync_supplier_products", False)
+        force_sync_supplier_products = (
+            self.initial_tap_state.get("force_sync_supplier_products")
+            or (self.tap_state or {}).get("force_sync_supplier_products")
+            or self.config.get("force_sync_supplier_products", False)
+        )
         if isinstance(force_sync_supplier_products, str):
             force_sync_supplier_products = force_sync_supplier_products.lower() == "true"
         if force_sync_supplier_products:
             self.logger.info(
-                "Running item_vendors_full_sync: force_sync_supplier_products is true in state"
+                "Running item_vendors_full_sync: force_sync_supplier_products is true"
             )
             return True
 
-        hg_last_modified = (self.tap_state or {}).get("hg_last_modified")
-        if not hg_last_modified:
-            self.logger.info("Skipping item_vendors_full_sync: hg_last_modified missing from state")
-            return False
+        bookmarks = self.initial_tap_state.get("bookmarks") or {}
+        item_bookmark = bookmarks.get("item") or {}
+        item_replication_key_value = item_bookmark.get("replication_key_value")
+
+        if not item_replication_key_value:
+            self.logger.info(
+                "Running item_vendors_full_sync: item bookmark replication_key_value missing"
+            )
+            return True
 
         try:
-            hg_last_modified_date = datetime.strptime(str(hg_last_modified)[:10], "%Y-%m-%d").date()
+            item_bookmark_date = datetime.strptime(
+                str(item_replication_key_value)[:10], "%Y-%m-%d"
+            ).date()
         except ValueError:
             self.logger.warning(
-                "Skipping item_vendors_full_sync: could not parse hg_last_modified=%s",
-                hg_last_modified,
+                "Skipping item_vendors_full_sync: could not parse item replication_key_value=%s",
+                item_replication_key_value,
             )
             return False
 
         today = datetime.utcnow().date()
-        should_run = hg_last_modified_date < today
+        should_run = item_bookmark_date < today
         if should_run:
             self.logger.info(
-                "Running item_vendors_full_sync: hg_last_modified date %s is before today %s",
-                hg_last_modified_date,
+                "Running item_vendors_full_sync: initial item bookmark date %s is before today %s",
+                item_bookmark_date,
                 today,
             )
         else:
             self.logger.info(
-                "Skipping item_vendors_full_sync: hg_last_modified date %s is not before today %s",
-                hg_last_modified_date,
+                "Skipping item_vendors_full_sync: initial item bookmark date %s is not before today %s",
+                item_bookmark_date,
                 today,
             )
         return should_run
