@@ -33,6 +33,7 @@ from hotglue_singer_sdk.exceptions import InvalidStreamSortException
 import singer
 from singer import StateMessage
 from hotglue_etl_exceptions import InvalidCredentialsError
+from tap_netsuite_rest.auth import NetsuiteOAuth1Client
 
 
 SCHEMAS_DIR = Path(__file__).parent / Path("./schemas")
@@ -40,7 +41,6 @@ logging.getLogger("backoff").setLevel(logging.CRITICAL)
 
 class RetryRequest(Exception):
     pass
-
 
 # REST metadata fields that are not safe to include in SuiteQL SELECT clauses.
 SUITEQL_EXCLUDED_FIELDS = frozenset(
@@ -125,6 +125,7 @@ class NetSuiteStream(RESTStream):
             resource_owner_secret=self.config["ns_token_secret"],
             realm=ns_account,
             signature_method=oauth1.SIGNATURE_HMAC_SHA256,
+            client_class=NetsuiteOAuth1Client,
         )
 
     def _probe_table_name(self) -> Optional[str]:
@@ -897,12 +898,41 @@ class NetsuiteDynamicSchema(NetSuiteStream):
     use_dynamic_fields = False
     filter_fields = False
     default_fields = []
+    schema_discovery_timeout = 60
+    schema_discovery_max_tries = 8
 
 
     def __init__(self, *args, **kwargs):
         self.float_fields = []
         self.integer_fields = []
         return super().__init__(*args, **kwargs)
+
+    def send_schema_request(
+        self,
+        method: str,
+        url: str,
+        headers: Optional[dict] = None,
+        json: Optional[dict] = None,
+    ) -> requests.Response:
+        """Sign and send a schema-discovery request.
+
+        OAuth1 timestamp/nonce are generated at prepare time, so this must
+        re-prepare on every retry instead of resending a PreparedRequest.
+        """
+        session = self.get_session()
+        prepared_request = session.prepare_request(
+            requests.Request(
+                method=method,
+                url=url,
+                headers=headers,
+                json=json,
+            )
+        )
+        response = session.send(
+            prepared_request, timeout=self.schema_discovery_timeout
+        )
+        self.validate_response(response)
+        return response
 
     @backoff.on_exception(backoff.expo, (
         HTTPError,
@@ -913,7 +943,11 @@ class NetsuiteDynamicSchema(NetSuiteStream):
     ), max_tries=5, factor=2)
     def get_schema(self): # noqa: C901
         s = self.get_session()
-        send_request = self.request_decorator(self.send_prepared_request)
+        send_request = self.request_decorator(
+            self.send_schema_request,
+            max_tries=self.schema_discovery_max_tries,
+            factor=2,
+        )
         self.logger.debug(
             "get_schema(%s) start table=%s use_dynamic_fields=%s",
             self.name,
@@ -930,16 +964,14 @@ class NetsuiteDynamicSchema(NetSuiteStream):
 
             account = self.config["ns_account"].replace("_", "-").replace("SB", "sb")
             url = f"https://{account}.suitetalk.api.netsuite.com/services/rest/record/v1/metadata-catalog/{self.table}"
-            prepared_req = s.prepare_request(
-                requests.Request(
-                    method="GET",
-                    url=url,
-                    headers=self.http_headers,
-                )
-            )
-            prepared_req.headers.update({"Accept": "application/schema+json"})
+            catalog_headers = dict(self.http_headers)
+            catalog_headers["Accept"] = "application/schema+json"
             self.logger.debug("get_schema(%s): metadata-catalog GET send", self.name)
-            response = send_request(prepared_req)
+            response = send_request(
+                method="GET",
+                url=url,
+                headers=catalog_headers,
+            )
             self.logger.debug(
                 "get_schema(%s): metadata-catalog GET done status=%s",
                 self.name,
@@ -997,16 +1029,10 @@ class NetsuiteDynamicSchema(NetSuiteStream):
 
             self.logger.info(f"Getting schema for {self.table} - stream: {self.name}")
             url = f"{self.url_base}?offset=0&limit=1000"
-
-            prepared_req = s.prepare_request(
-                requests.Request(
-                    method="POST",
-                    url=url,
-                    headers=self.http_headers,
-                    json={
-                        "q": f"SELECT * FROM {self.table} ORDER BY {self.replication_key} DESC" if self.replication_key else f"SELECT * FROM {self.table}"
-                    }
-                )
+            schema_query = (
+                f"SELECT * FROM {self.table} ORDER BY {self.replication_key} DESC"
+                if self.replication_key
+                else f"SELECT * FROM {self.table}"
             )
 
             self.logger.debug(
@@ -1017,7 +1043,12 @@ class NetsuiteDynamicSchema(NetSuiteStream):
 
 
             try:
-                response = send_request(prepared_req)
+                response = send_request(
+                    method="POST",
+                    url=url,
+                    headers=self.http_headers,
+                    json={"q": schema_query},
+                )
                 self.logger.debug(
                     "get_schema(%s): suiteql schema inference POST done status=%s",
                     self.name,
