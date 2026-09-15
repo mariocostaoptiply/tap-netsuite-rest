@@ -42,6 +42,10 @@ logging.getLogger("backoff").setLevel(logging.CRITICAL)
 class RetryRequest(Exception):
     pass
 
+
+class RateLimitAPIError(RetriableAPIError):
+    """Raised for HTTP 429 responses that need longer backoff."""
+
 # REST metadata fields that are not safe to include in SuiteQL SELECT clauses.
 SUITEQL_EXCLUDED_FIELDS = frozenset(
     {"links", "refname", "classtranslation", "currencyname"}
@@ -898,8 +902,12 @@ class NetsuiteDynamicSchema(NetSuiteStream):
     use_dynamic_fields = False
     filter_fields = False
     default_fields = []
-    schema_discovery_timeout = 60
+    # Schema discovery has a separate request budget from data extraction.
+    schema_discovery_timeout = 120
     schema_discovery_max_tries = 8
+    schema_discovery_rate_limit_max_tries = 12
+    schema_discovery_rate_limit_factor = 4
+    schema_discovery_rate_limit_max_value = 120
 
 
     def __init__(self, *args, **kwargs):
@@ -931,8 +939,43 @@ class NetsuiteDynamicSchema(NetSuiteStream):
         response = session.send(
             prepared_request, timeout=self.schema_discovery_timeout
         )
+        if response.status_code == 429:
+            msg = (
+                f"429 Rate Limit for metadata-catalog table {self.table} "
+                f"- stream: {self.name}. Response: {response.text}"
+            )
+            raise RateLimitAPIError(msg)
         self.validate_response(response)
         return response
+
+    def schema_request_decorator(self, func: Callable) -> Callable:
+        """Backoff for metadata-catalog requests.
+
+        Uses longer waits for 429 rate limits; standard backoff for other retriable errors.
+        """
+        rate_limit_retry = backoff.on_exception(
+            backoff.expo,
+            RateLimitAPIError,
+            max_tries=self.schema_discovery_rate_limit_max_tries,
+            factor=self.schema_discovery_rate_limit_factor,
+            max_value=self.schema_discovery_rate_limit_max_value,
+            on_backoff=self.backoff_handler,
+        )
+        standard_retry = backoff.on_exception(
+            backoff.expo,
+            (
+                HTTPError,
+                RetriableAPIError,
+                requests.exceptions.Timeout,
+                requests.exceptions.ConnectionError,
+                RemoteDisconnected,
+            ),
+            max_tries=self.schema_discovery_max_tries,
+            factor=2,
+            giveup=lambda exc: isinstance(exc, RateLimitAPIError),
+            on_backoff=self.backoff_handler,
+        )
+        return standard_retry(rate_limit_retry(func))
 
     @backoff.on_exception(backoff.expo, (
         HTTPError,
@@ -943,11 +986,7 @@ class NetsuiteDynamicSchema(NetSuiteStream):
     ), max_tries=5, factor=2)
     def get_schema(self): # noqa: C901
         s = self.get_session()
-        send_request = self.request_decorator(
-            self.send_schema_request,
-            max_tries=self.schema_discovery_max_tries,
-            factor=2,
-        )
+        send_request = self.schema_request_decorator(self.send_schema_request)
         self.logger.debug(
             "get_schema(%s) start table=%s use_dynamic_fields=%s",
             self.name,
