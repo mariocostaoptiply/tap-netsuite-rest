@@ -1268,6 +1268,17 @@ class BulkParentStream(NetsuiteDynamicStream):
     end_date = None
 
     @property
+    def schema(self):
+        schema = super().schema
+        if self.name in ("sales_orders", "purchase_orders"):
+            # Saved catalogs can misclassify createddate as a locale-dependent string.
+            # Normalize every schema path so SELECT formats it and preserves the time.
+            schema = deepcopy(schema)
+            createddate = schema["properties"].setdefault("createddate", {})
+            createddate.update(type=["string", "null"], format="date-time")
+        return schema
+
+    @property
     def child_context_size(self):
         return self.config.get("child_context_size", 250)
 
