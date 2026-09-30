@@ -2798,7 +2798,10 @@ class PurchaseOrdersStream(BulkParentStream):
     table = "transaction"
     custom_filter = "type = 'PurchOrd'"
     replication_key = "lastmodifieddate"
-    _select = "*, BUILTIN.DF(status) status"
+    _select = (
+        "*, transaction.status AS status_code, "
+        "BUILTIN.DF(transaction.status) AS status"
+    )
 
     default_fields = [
         th.Property("externalid", th.StringType),

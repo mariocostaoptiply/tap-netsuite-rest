@@ -1276,6 +1276,10 @@ class BulkParentStream(NetsuiteDynamicStream):
             schema = deepcopy(schema)
             createddate = schema["properties"].setdefault("createddate", {})
             createddate.update(type=["string", "null"], format="date-time")
+            if self.name == "purchase_orders":
+                schema["properties"].setdefault(
+                    "status_code", {"type": ["string", "null"]}
+                )
         return schema
 
     @property
