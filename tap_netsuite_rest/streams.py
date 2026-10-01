@@ -2756,7 +2756,10 @@ class ItemReceiptsStream(BulkParentStream):
     
     default_fields = [
         th.Property("externalid", th.StringType),
-        th.Property("lastmodifieddate", th.DateTimeType)
+        th.Property("lastmodifieddate", th.DateTimeType),
+        th.Property("trandate", th.DateTimeType),
+        th.Property("createdfrom", th.StringType),
+        th.Property("tranid", th.StringType),
     ]
 
     def get_child_context(self, record, context) -> dict:
@@ -2771,10 +2774,30 @@ class ItemReceiptLinesStream(NetsuiteDynamicStream):
     select_prefix = "tl"
     query_table = "transaction t"
     join = "INNER JOIN transactionline tl on tl.transaction = t.id"
-    _custom_filter = "mainline = 'F'"
+    _custom_filter = (
+        "mainline = 'F' AND isinventoryaffecting = 'T' AND iscogs = 'F'"
+    )
+
+    default_fields = [
+        th.Property("item", th.StringType),
+        th.Property("quantity", th.NumberType),
+        th.Property("rate", th.NumberType),
+        th.Property("createdfrom", th.StringType),
+        th.Property("itemtype", th.StringType),
+    ]
+
+    @property
+    def schema(self):
+        schema = super().schema
+        default_properties = th.PropertiesList(
+            *self.default_fields
+        ).to_dict()["properties"]
+        for field, field_schema in default_properties.items():
+            schema["properties"].setdefault(field, field_schema)
+        return schema
 
     def prepare_request_payload(self, context, next_page_token):
-        # fetch bill lines filtering by transaction id from bills parent stream
+        # Fetch receipt lines filtering by transaction ID from the parent stream.
         ids = ", ".join(f"'{id}'" for id in context["ids"])
         self.custom_filter = f"{self._custom_filter}"
         self.custom_filter = f"{self.custom_filter} and tl.transaction IN ({ids})"
