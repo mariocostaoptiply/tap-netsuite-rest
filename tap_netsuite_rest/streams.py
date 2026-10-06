@@ -703,6 +703,7 @@ class InventoryItemLocationsStream(NetSuiteStream):
         th.Property("fixedlotmultiple", th.StringType),
         th.Property("leadtime", th.StringType),
         th.Property("minimumorderquantity", th.StringType),
+        th.Property("reorderpoint", th.StringType),
         th.Property("supplylotsizingmethod", th.StringType),
     ).to_dict()
 

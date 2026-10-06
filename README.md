@@ -25,6 +25,16 @@ tap is available by running:
 tap-netsuite-rest --about
 ```
 
+### Inventory Location Reorder Point
+
+The `inventory_item_locations` stream exposes NetSuite's location-specific
+`reorderpoint` as a nullable string. Rediscover the catalog and select this field
+to include `inventoryitemlocations.reorderpoint` in the SuiteQL query. An omitted
+value is not the same as `"0"`.
+
+The replication key remains `lastquantityavailablechange`; this addition does
+not guarantee extraction of reorder-point-only changes.
+
 ### Source Authentication and Authorization
 
 - [ ] `Developer TODO:` If your tap requires special access on the source system, or any special authentication requirements, provide those here.
