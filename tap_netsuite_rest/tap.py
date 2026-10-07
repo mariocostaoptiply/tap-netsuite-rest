@@ -90,9 +90,15 @@ class TapNetSuite(Tap):
         parse_env_config: bool = False,
         validate_config: bool = True,
     ) -> None:
+        self.force_sync_inventory = False
         super().__init__(config, catalog, state, parse_env_config, validate_config)
         self.soap_client = NetsuiteSOAPClient(self.config, self.logger)
     
+
+    def load_state(self, state):
+        super().load_state(state)
+        self.force_sync_inventory = state.get("force_sync_inventory", False)
+        self.state.pop("force_sync_inventory", None)
 
     def discover_streams(self) -> List[Stream]:
         """Return a list of discovered streams."""

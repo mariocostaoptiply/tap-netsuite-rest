@@ -206,7 +206,7 @@ class NetSuiteStream(RESTStream):
         totalResults = next(extract_jsonpath("$.totalResults", response.json()))
         self.logger.info(f"[{self.name}] Total results = {totalResults}. Offset = {offset}")
 
-        if not self.stream_state.get("replication_key") and self.name == "inventory_item_locations" and totalResults > self.cap_total_results:
+        if self.name == "inventory_item_locations" and self._inventory_item_range_sync and totalResults > self.cap_total_results:
             # NOTE: this is to avoid a case where we miss data, better to report an error than to miss data
             raise Exception(f"totalResults is greater than {self.cap_total_results} records. This should not happen.")
 
@@ -294,7 +294,7 @@ class NetSuiteStream(RESTStream):
 
             return offset
 
-        if not self.stream_state.get("replication_key") and self.name == "inventory_item_locations" and not has_next:
+        if self.name == "inventory_item_locations" and self._inventory_item_range_sync and not has_next:
             max_item_value = self.cap_total_results # TODO: this probably should be more dynamic
             interval_increment = 2500 # TODO: maybe we should lower this even further or make it dynamic
             # in the case we need to keep iterating, we should increment
@@ -306,7 +306,7 @@ class NetSuiteStream(RESTStream):
             min_value = int(current_range[0].split(">=")[1])
             max_value = int(current_range[1].split("<")[1])
 
-            if min_value == max_item_value:
+            if max_value == max_item_value:
                 self.custom_filter = f"item >= {max_item_value}"
             else:
                 self.custom_filter = f"item >= {min_value + interval_increment} AND item < {max_value + interval_increment}"
