@@ -15,27 +15,34 @@ from tap_netsuite_rest.client_soap import NetsuiteSOAPClient
 import os
 import logging
 
-# When a new stream is added or changes in the tap, it would break all existing test suites due to dynamic discover.
-# By allowing caller to include only streams we need we are able to ensure existing tests continue to pass.
-# 1. Get the environment variable INCLUDE_STREAMS and split by commas
-include_streams = os.environ.get('INCLUDE_STREAMS', "").split(',') if os.environ.get('INCLUDE_STREAMS', "") else []
-logging.info("INCLUDE_STREAMS: "+ os.environ.get('INCLUDE_STREAMS', ''))
+# This branch is scoped to the streams consumed by the Mitari ETL. INCLUDE_STREAMS
+# may narrow this set for diagnostics, but it cannot enable other streams.
+MITARI_STREAMS = frozenset({
+    "DeletedRecordsStream",
+    "InventoryItemLocationsStream",
+    "ItemStream",
+    "ItemPriceStream",
+    "ItemReceiptLinesStream",
+    "ItemReceiptsStream",
+    "ItemVendorStream",
+    "kitItemMemberStream",
+    "PurchaseOrderLinesStream",
+    "PurchaseOrdersStream",
+    "SalesOrderLinesStream",
+    "SalesOrdersStream",
+    "VendorStream",
+})
 
-# 2. Get the environment variable IGNORE_STREAMS and split by commas
-ignore_streams = os.environ.get('IGNORE_STREAMS', "").split(',') if os.environ.get('IGNORE_STREAMS', "") else []
-logging.info("IGNORE_STREAMS: "+ os.environ.get('IGNORE_STREAMS', ''))
+include_streams = os.environ.get("INCLUDE_STREAMS", "").split(",") if os.environ.get("INCLUDE_STREAMS") else []
+logging.info("INCLUDE_STREAMS: " + os.environ.get("INCLUDE_STREAMS", ""))
+
+ignore_streams = os.environ.get("IGNORE_STREAMS", "").split(",") if os.environ.get("IGNORE_STREAMS") else []
+logging.info("IGNORE_STREAMS: " + os.environ.get("IGNORE_STREAMS", ""))
 
 
-def get_bill_attachments_stream(config):
-    if 'bill_attachments_restlet_url' in config \
-        and 'bill_attachments_suitelet_url' in config:
-        return streams.BillAttachmentsRestletStream
-    
-    return streams.BillAttachmentsSOAPStream
-
-
-# Function to filter streams to be tested
 def streams_to_sync(self, include_streams, ignore_streams):
+    """Return the Mitari stream types permitted for this run."""
+    selected_streams = MITARI_STREAMS.intersection(include_streams) if include_streams else MITARI_STREAMS
     stream_types = []
     catalog_types = None
     if self.config.get("use_input_catalog", True) and self.input_catalog:
@@ -50,16 +57,11 @@ def streams_to_sync(self, include_streams, ignore_streams):
                 catalog_types.add(parent)
                 pending.append(parent)
 
-    if not ((include_streams and 'BillAttachmentsStream' not in include_streams) or 'BillAttachmentsStream' in ignore_streams):
-        attachment_type = get_bill_attachments_stream(self.config)
-        if catalog_types is None or attachment_type in catalog_types:
-            stream_types.append(attachment_type(self))
-
     for name, cls in inspect.getmembers(streams, inspect.isclass):
         if cls.__module__ == 'tap_netsuite_rest.streams':
             if cls.name == 'bill_attachments':
                 continue
-            if (include_streams and name not in include_streams) or name in ignore_streams:
+            if name not in selected_streams or name in ignore_streams:
                 continue
             if catalog_types is not None and cls not in catalog_types:
                 continue
