@@ -168,7 +168,7 @@ class NetSuiteStream(RESTStream):
             response = session.send(prepared_req, timeout=self.timeout)
             self.validate_response(response)
             return response.status_code == 200
-        except Exception as e:
+        except FatalAPIError as e:
             self.logger.error(f"Error probing table {table}: {e}")
             return False
 
@@ -759,13 +759,6 @@ class NetSuiteStream(RESTStream):
         )(func)
         return decorator
 
-    def send_prepared_request(
-        self, prepared_request: requests.PreparedRequest
-    ) -> requests.Response:
-        response = self.get_session().send(prepared_request, timeout=self.timeout)
-        self.validate_response(response)
-        return response
-
     def last_day_of_month(self, any_day):
         # The day 28 exists in every month. 4 days later, it's always next month
         next_month = any_day.replace(day=28) + timedelta(days=4)
@@ -895,6 +888,12 @@ class NetSuiteStream(RESTStream):
 
 
 class NetsuiteDynamicSchema(NetSuiteStream):
+    """Infer only from successful responses; incomplete sales catalogs need rediscovery.
+
+    Empty samples retain static sales columns. Inaccessible optional tables are
+    omitted by the tap; authentication and exhausted transient failures propagate.
+    """
+
     schema_response = None
     fields = None
     date_fields = []
@@ -902,6 +901,7 @@ class NetsuiteDynamicSchema(NetSuiteStream):
     use_dynamic_fields = False
     filter_fields = False
     default_fields = []
+    required_catalog_fields = ()
     # Schema discovery has a separate request budget from data extraction.
     schema_discovery_timeout = 120
     schema_discovery_max_tries = 8
@@ -952,40 +952,47 @@ class NetsuiteDynamicSchema(NetSuiteStream):
         """Backoff for metadata-catalog requests.
 
         Uses longer waits for 429 rate limits; standard backoff for other retriable errors.
+        Attempts are shared across both retry policies for each HTTP request.
         """
-        rate_limit_retry = backoff.on_exception(
-            backoff.expo,
-            RateLimitAPIError,
-            max_tries=self.schema_discovery_rate_limit_max_tries,
-            factor=self.schema_discovery_rate_limit_factor,
-            max_value=self.schema_discovery_rate_limit_max_value,
-            on_backoff=self.backoff_handler,
-        )
-        standard_retry = backoff.on_exception(
-            backoff.expo,
-            (
-                HTTPError,
-                RetriableAPIError,
-                requests.exceptions.Timeout,
-                requests.exceptions.ConnectionError,
-                RemoteDisconnected,
-            ),
-            max_tries=self.schema_discovery_max_tries,
-            factor=2,
-            giveup=lambda exc: isinstance(exc, RateLimitAPIError),
-            on_backoff=self.backoff_handler,
-        )
-        return standard_retry(rate_limit_retry(func))
+        def request(*args, **kwargs):
+            attempts = 0
 
-    @backoff.on_exception(backoff.expo, (
-        HTTPError,
-        RetriableAPIError,
-        requests.exceptions.Timeout,
-        requests.exceptions.ConnectionError,
-        RemoteDisconnected,
-    ), max_tries=5, factor=2)
+            def send():
+                nonlocal attempts
+                attempts += 1
+                return func(*args, **kwargs)
+
+            rate_limit_retry = backoff.on_exception(
+                backoff.expo,
+                RateLimitAPIError,
+                max_tries=self.schema_discovery_rate_limit_max_tries,
+                factor=self.schema_discovery_rate_limit_factor,
+                max_value=self.schema_discovery_rate_limit_max_value,
+                giveup=lambda exc: attempts >= self.schema_discovery_rate_limit_max_tries,
+                on_backoff=self.backoff_handler,
+            )
+            standard_retry = backoff.on_exception(
+                backoff.expo,
+                (
+                    HTTPError,
+                    RetriableAPIError,
+                    requests.exceptions.Timeout,
+                    requests.exceptions.ConnectionError,
+                    RemoteDisconnected,
+                ),
+                max_tries=self.schema_discovery_max_tries,
+                factor=2,
+                giveup=lambda exc: (
+                    isinstance(exc, RateLimitAPIError)
+                    or attempts >= self.schema_discovery_max_tries
+                ),
+                on_backoff=self.backoff_handler,
+            )
+            return standard_retry(rate_limit_retry(send))()
+
+        return request
+
     def get_schema(self): # noqa: C901
-        s = self.get_session()
         send_request = self.schema_request_decorator(self.send_schema_request)
         self.logger.debug(
             "get_schema(%s) start table=%s use_dynamic_fields=%s",
@@ -1016,15 +1023,28 @@ class NetsuiteDynamicSchema(NetSuiteStream):
                 self.name,
                 response.status_code,
             )
-            self.schema_response = response.json()
+            schema_response = response.json()
+            if not isinstance(schema_response, dict) or not isinstance(schema_response.get("properties"), dict):
+                raise ValueError(f"Invalid metadata schema for {self.name}")
+            self.schema_response = schema_response
+        except (
+            InvalidCredentialsError,
+            RetriableAPIError,
+            HTTPError,
+            requests.exceptions.Timeout,
+            requests.exceptions.ConnectionError,
+            RemoteDisconnected,
+        ):
+            raise
         except Exception as e:
             self.logger.warning(f"Failed to get schema using metadata-catalog for {self.table} - stream: {self.name}, Error: {e}")
         
-        # if any stream doesn't have access to metadata endpoint, fetch first 1k records and custom fields to build the schema
+        # If metadata is unavailable, infer from a SuiteQL sample and custom fields.
 
         # fetch custom fields
         add_custom_fields_streams = ["invoices", "bills", "invoice_lines", "bill_lines", "bill_expenses"]
         if not self.schema_response  and self._tap.custom_fields is None and self.name in add_custom_fields_streams:
+            s = self.get_session()
             # request custom fields types
             offset = 0
             custom_fields = {}
@@ -1097,14 +1117,16 @@ class NetsuiteDynamicSchema(NetSuiteStream):
                     "get_schema(%s): suiteql schema inference parsing response JSON",
                     self.name,
                 )
-                # NOTE: this will only get fields in the first 1k records, we could still miss things
-                for item in response.json().get("items"):
-                    self.fields.update(set(item.keys()))
+                items = response.json().get("items")
+                if not isinstance(items, list):
+                    raise ValueError(f"Invalid schema sample for {self.name}: items must be a list")
+                for item in items:
+                    self.fields.update(item.keys())
 
                 # decide which ones are date fields
                 pot_date_fields = [f for f in self.fields if 'date' in f and 'custbody' not in f and 'custrecord' not in f]
                 for f in pot_date_fields:
-                    match = [i for i in response.json().get("items") if i.get(f)]
+                    match = [i for i in items if i.get(f)]
                     if len(match) > 0:
                         try:
                             try:
@@ -1117,8 +1139,8 @@ class NetsuiteDynamicSchema(NetSuiteStream):
 
                 # decide who ones are boolean fields
                 def all_bool(f):
-                    match = [i for i in response.json().get("items") if i.get(f) in ["T", "F", None]]
-                    return len(match) == len(response.json().get("items"))
+                    match = [i for i in items if i.get(f) in ["T", "F", None]]
+                    return len(match) == len(items)
 
                 self.bool_fields = [f for f in self.fields if all_bool(f)]
 
@@ -1149,15 +1171,36 @@ class NetsuiteDynamicSchema(NetSuiteStream):
                     "get_schema(%s): suiteql schema inference finished",
                     self.name,
                 )
+            except FatalAPIError:
+                self.fields = None
+                # Keep permission filtering, but never hide failed inference on an accessible table.
+                if not self.required_catalog_fields and self.config.get("remove_unauthorized_streams") and not self._tap.input_catalog:
+                    table = self._probe_table_name()
+                    if table is not None:
+                        cache = self._tap._table_access_cache
+                        if table not in cache:
+                            cache[table] = self.probe_table_access(table)
+                        if not cache[table]:
+                            self.fields = set()
+                            return
+                raise
             except Exception as e:
-                self.logger.warning(f"Failed to get schema by fetching first 1k records for {self.table} - stream: {self.name}, Error: {e}")
-                pass
+                self.fields = None
+                self.logger.error(f"Failed to infer schema for {self.table} - stream: {self.name}, Error: {e}")
+                raise
 
 
     @property
     def schema(self): # noqa: C901
         if self.config.get("use_input_catalog", True) and self._tap.input_catalog and self._tap.input_catalog.get(self.name):
-            return self._tap.input_catalog.get(self.name).schema.to_dict()
+            schema = self._tap.input_catalog.get(self.name).schema.to_dict()
+            missing = sorted(set(self.required_catalog_fields) - set(schema.get("properties", {})))
+            if missing:
+                raise FatalAPIError(
+                    f"Incomplete catalog for {self.name}: missing {', '.join(missing)}. "
+                    "Run rediscovery before syncing."
+                )
+            return schema
 
         # Get netsuite schema for table
         if self.fields is None and self.schema_response is None:
@@ -1260,6 +1303,8 @@ class NetsuiteDynamicStream(NetsuiteDynamicSchema):
                 continue
 
             field_info = schema[field]
+            if value is None and "null" in field_info.get("type", []):
+                continue
             field_type = field_info.get("type", ["null"])[0]
             # Process nested properties
             if "properties" in field_info:

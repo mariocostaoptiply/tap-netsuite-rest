@@ -37,15 +37,31 @@ def get_bill_attachments_stream(config):
 # Function to filter streams to be tested
 def streams_to_sync(self, include_streams, ignore_streams):
     stream_types = []
+    catalog_types = None
+    if self.config.get("use_input_catalog", True) and self.input_catalog:
+        catalog_types = {
+            cls for _, cls in inspect.getmembers(streams, inspect.isclass)
+            if cls.__module__ == 'tap_netsuite_rest.streams' and self.input_catalog.get(cls.name)
+        }
+        pending = list(catalog_types)
+        for cls in pending:
+            parent = getattr(cls, "parent_stream_type", None)
+            if parent is not None and parent not in catalog_types:
+                catalog_types.add(parent)
+                pending.append(parent)
 
     if not ((include_streams and 'BillAttachmentsStream' not in include_streams) or 'BillAttachmentsStream' in ignore_streams):
-        stream_types.append(get_bill_attachments_stream(self.config)(self))
+        attachment_type = get_bill_attachments_stream(self.config)
+        if catalog_types is None or attachment_type in catalog_types:
+            stream_types.append(attachment_type(self))
 
     for name, cls in inspect.getmembers(streams, inspect.isclass):
         if cls.__module__ == 'tap_netsuite_rest.streams':
             if cls.name == 'bill_attachments':
                 continue
             if (include_streams and name not in include_streams) or name in ignore_streams:
+                continue
+            if catalog_types is not None and cls not in catalog_types:
                 continue
             stream_types.append(cls(self))
     return stream_types
@@ -91,6 +107,7 @@ class TapNetSuite(Tap):
         validate_config: bool = True,
     ) -> None:
         self.force_sync_inventory = False
+        self._table_access_cache = {}
         super().__init__(config, catalog, state, parse_env_config, validate_config)
         self.soap_client = NetsuiteSOAPClient(self.config, self.logger)
     
@@ -108,7 +125,7 @@ class TapNetSuite(Tap):
             return streams
 
         accessible = []
-        table_access_cache: dict[str, bool] = {}
+        table_access_cache = self._table_access_cache
 
         for stream in streams:
             probe_table_name = getattr(stream, "_probe_table_name", None)

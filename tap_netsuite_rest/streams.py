@@ -2895,10 +2895,18 @@ class SalesOrdersStream(BulkParentStream):
     custom_filter = "type = 'SalesOrd'"
     replication_key = "lastmodifieddate"
     _select = "*, BUILTIN.DF(status) status"
+    always_add_default_fields = True
+    # BulkParentStream normalizes createddate even when a saved catalog omits it.
+    required_catalog_fields = ("id", "foreigntotal", "closedate", "tranid")
 
     default_fields = [
         th.Property("externalid", th.StringType),
-        th.Property("lastmodifieddate", th.DateTimeType)
+        th.Property("lastmodifieddate", th.DateTimeType),
+        th.Property("id", th.StringType),
+        th.Property("foreigntotal", th.StringType),
+        th.Property("createddate", th.DateTimeType),
+        th.Property("closedate", th.DateTimeType),
+        th.Property("tranid", th.StringType),
     ]
 
     def get_child_context(self, record, context) -> dict:
@@ -2914,11 +2922,16 @@ class SalesOrderLinesStream(NetsuiteDynamicStream):
     query_table = "transaction t"
     join = "INNER JOIN transactionline tl on tl.transaction = t.id"
     _custom_filter = "mainline = 'F'" # this filter returns the same amount of lines as the sales order in the UI + discount items if exists
+    always_add_default_fields = True
+    required_catalog_fields = ("transaction", "uniquekey", "item", "quantity", "netamount")
 
     default_fields = [
         th.Property("item", th.StringType),
         th.Property("quantity", th.NumberType),
         th.Property("rate", th.NumberType),
+        th.Property("transaction", th.StringType),
+        th.Property("uniquekey", th.StringType),
+        th.Property("netamount", th.StringType),
     ]
 
     def prepare_request_payload(self, context, next_page_token):
