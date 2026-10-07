@@ -139,6 +139,21 @@ def test_root_flag_backfills_old_and_null_rows(
     assert stream.replication_method == "FULL_TABLE"
 
 
+def test_missing_inventory_bookmark_ignores_start_date(capsys):
+    bookmarks = deepcopy(BOOKMARKS)
+    bookmarks.pop("inventory_item_locations")
+    tap, stream = make_tap({"bookmarks": bookmarks})
+
+    records = sync_records(tap, capsys)
+
+    assert inventory_values(records) == inventory_values(SOURCE)
+    assert stream.replication_method == "INCREMENTAL"
+    assert tap.state["bookmarks"]["inventory_item_locations"] == {
+        "replication_key": "lastquantityavailablechange",
+        "replication_key_value": "2026-10-06 00:00:00",
+    }
+
+
 @pytest.mark.parametrize("flag", [False, "false", "FALSE", None])
 def test_false_root_flag_retains_incremental_coverage(flag, capsys):
     tap, stream = make_tap({"force_sync_inventory": flag, "bookmarks": deepcopy(BOOKMARKS)})

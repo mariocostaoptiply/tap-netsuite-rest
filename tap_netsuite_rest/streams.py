@@ -703,9 +703,16 @@ class InventoryItemLocationsStream(NetSuiteStream):
         return super().replication_method
 
     def get_replication_key_conditions(self, context):
-        if self.force_sync_inventory:
+        if self._inventory_item_range_sync:
             return []
         return None
+
+    def _increment_stream_state(
+        self, latest_record: Dict[str, Any], *, context: Optional[dict] = None
+    ) -> None:
+        if latest_record.get(self.replication_key) is None:
+            return
+        super()._increment_stream_state(latest_record, context=context)
 
     @property
     def custom_filter(self):

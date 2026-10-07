@@ -35,6 +35,11 @@ value is not the same as `"0"`.
 The replication key remains `lastquantityavailablechange`; this addition does
 not guarantee extraction of reorder-point-only changes.
 
+To rebuild this stream, remove only the `inventory_item_locations` bookmark
+from Singer state. The next sync scans every item range without applying
+`start_date`, emits rows whose replication key is null, and rebuilds the
+bookmark from the greatest non-null `lastquantityavailablechange`.
+
 ### Source Authentication and Authorization
 
 - [ ] `Developer TODO:` If your tap requires special access on the source system, or any special authentication requirements, provide those here.
