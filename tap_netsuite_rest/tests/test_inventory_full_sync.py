@@ -143,6 +143,9 @@ def test_missing_inventory_bookmark_ignores_start_date(capsys):
     bookmarks = deepcopy(BOOKMARKS)
     bookmarks.pop("inventory_item_locations")
     tap, stream = make_tap({"bookmarks": bookmarks})
+    assert stream.prepare_request_payload(None, None)["q"].endswith(
+        "ORDER BY inventoryitemlocations.item, inventoryitemlocations.location"
+    )
 
     records = sync_records(tap, capsys)
 

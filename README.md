@@ -39,6 +39,9 @@ To rebuild this stream, remove only the `inventory_item_locations` bookmark
 from Singer state. The next sync scans every item range without applying
 `start_date`, emits rows whose replication key is null, and rebuilds the
 bookmark from the greatest non-null `lastquantityavailablechange`.
+Range scans use deterministic `item, location` ordering so tied
+`lastquantityavailablechange` values cannot move records between offset pages.
+
 
 ### Source Authentication and Authorization
 

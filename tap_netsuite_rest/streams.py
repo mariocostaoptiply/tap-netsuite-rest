@@ -684,17 +684,17 @@ class InventoryItemLocationsStream(NetSuiteStream):
             self.force_sync_inventory
             or not self.stream_state.get("replication_key")
         )
-        if self.force_sync_inventory:
+        if self._inventory_item_range_sync:
             self.order_by = (
                 "ORDER BY inventoryitemlocations.item, inventoryitemlocations.location"
             )
-            self.logger.info(
-                "Running full inventory sync: force_sync_inventory is true"
-            )
-        if self._inventory_item_range_sync:
             self._custom_filter = "item >= 0 AND item < 2500"
         else:
             self._custom_filter = ""
+        if self.force_sync_inventory:
+            self.logger.info(
+                "Running full inventory sync: force_sync_inventory is true"
+            )
 
     @property
     def replication_method(self):
