@@ -44,6 +44,13 @@ SOURCE = [
      "lastquantityavailablechange": "2026-10-06 00:00:00"},
 ]
 
+SPARSE_SOURCE = [
+    {"item": "2500", "location": "113", "quantityavailable": "1", "reorderpoint": "0"},
+    {"item": "2501", "location": "113", "quantityavailable": "0", "reorderpoint": "0"},
+    {"item": "2502", "location": "113", "quantityavailable": "2", "reorderpoint": "0"},
+    {"item": "2503", "location": "113", "quantityavailable": None, "reorderpoint": "0"},
+]
+
 
 @pytest.fixture(autouse=True)
 def no_network():
@@ -95,15 +102,47 @@ def source_response(request, **kwargs):
     return response
 
 
-def sync_messages(tap, capsys):
-    with patch("requests.sessions.Session.send", side_effect=source_response):
+def sparse_quantityavailable_response(request, **kwargs):
+    query = json.loads(request.body)["q"]
+    rows = deepcopy(SPARSE_SOURCE)
+    item_range = re.search(r"item >= (\d+)(?: AND item < (\d+))?", query)
+    if item_range:
+        lower, upper = item_range.groups()
+        rows = [row for row in rows if int(row["item"]) >= int(lower)
+                and (upper is None or int(row["item"]) < int(upper))]
+    has_explicit_filter = (
+        "inventoryitemlocations.quantityavailable IS NOT NULL" in query
+    )
+    if has_explicit_filter:
+        rows = [row for row in rows if row["quantityavailable"] is not None]
+
+    params = parse_qs(urlsplit(request.url).query)
+    offset, limit = int(params["offset"][0]), int(params["limit"][0])
+    if has_explicit_filter:
+        page = rows[offset:offset + limit]
+    else:
+        # NetSuite can report the unfiltered total while returning sparse pages
+        # when quantityavailable is projected without an explicit predicate.
+        page = rows[offset:offset + 1]
+
+    response = requests.Response()
+    response.status_code = 200
+    response._content = json.dumps({
+        "items": page, "count": len(page), "offset": offset,
+        "hasMore": offset + limit < len(rows), "totalResults": len(rows),
+    }).encode()
+    return response
+
+
+def sync_messages(tap, capsys, response=source_response):
+    with patch("requests.sessions.Session.send", side_effect=response):
         tap.sync_all()
     messages = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
     return messages
 
 
-def sync_records(tap, capsys):
-    messages = sync_messages(tap, capsys)
+def sync_records(tap, capsys, response=source_response):
+    messages = sync_messages(tap, capsys, response)
     assert all("force_sync_inventory" not in message["value"]
                for message in messages if message["type"] == "STATE")
     return [message["record"] for message in messages if message["type"] == "RECORD"]
@@ -155,6 +194,16 @@ def test_missing_inventory_bookmark_ignores_start_date(capsys):
         "replication_key": "lastquantityavailablechange",
         "replication_key_value": "2026-10-06 00:00:00",
     }
+
+
+def test_range_sync_filters_null_quantityavailable_before_pagination(capsys):
+    bookmarks = deepcopy(BOOKMARKS)
+    bookmarks.pop("inventory_item_locations")
+    tap, _ = make_tap({"bookmarks": bookmarks})
+
+    records = sync_records(tap, capsys, sparse_quantityavailable_response)
+
+    assert inventory_values(records) == inventory_values(SPARSE_SOURCE[:-1])
 
 
 @pytest.mark.parametrize("flag", [False, "false", "FALSE", None])

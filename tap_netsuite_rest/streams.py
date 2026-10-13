@@ -704,7 +704,7 @@ class InventoryItemLocationsStream(NetSuiteStream):
 
     def get_replication_key_conditions(self, context):
         if self._inventory_item_range_sync:
-            return []
+            return ["inventoryitemlocations.quantityavailable IS NOT NULL"]
         return None
 
     def _increment_stream_state(

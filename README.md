@@ -41,6 +41,9 @@ from Singer state. The next sync scans every item range without applying
 bookmark from the greatest non-null `lastquantityavailablechange`.
 Range scans use deterministic `item, location` ordering so tied
 `lastquantityavailablechange` values cannot move records between offset pages.
+They also filter `quantityavailable IS NOT NULL` before pagination. NetSuite can
+otherwise report totals that include rows omitted from pages when this calculated
+field is selected, causing fixed offsets to skip valid inventory rows.
 
 
 ### Source Authentication and Authorization
