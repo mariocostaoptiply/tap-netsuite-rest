@@ -76,6 +76,7 @@ class NetSuiteStream(RESTStream):
     order_by = None
     append_select = None
     time_jump = relativedelta(months=1)
+    group_by = None
     always_add_default_fields = False
     query_table = None
     timeout = 500
@@ -681,7 +682,7 @@ class NetSuiteStream(RESTStream):
         table = self.query_table or self.table
 
         payload = dict(
-            q=f"SELECT {select} FROM {table} {join} {filters} {order_by}"
+            q=f"SELECT {select} FROM {table} {join} {filters} {self.group_by or ''} {order_by}"
         )
         self.logger.info(f"Making query ({payload['q']})")
         return payload

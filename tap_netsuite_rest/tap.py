@@ -18,6 +18,7 @@ import logging
 # This branch is scoped to the streams consumed by the Mitari ETL. INCLUDE_STREAMS
 # may narrow this set for diagnostics, but it cannot enable other streams.
 MITARI_STREAMS = frozenset({
+    "AssemblyBomComponentsStream",
     "DeletedRecordsStream",
     "InventoryItemLocationsStream",
     "ItemStream",
