@@ -601,6 +601,7 @@ class ItemStream(BulkParentStream):
     primary_keys = ["id", "lastmodifieddate"]
     table = "item"
     type_filter = False
+    always_add_default_fields = True
     replication_key = "lastmodifieddate"
 
     default_fields = [
@@ -627,6 +628,7 @@ class ItemStream(BulkParentStream):
         th.Property("isinactive", th.BooleanType),
         th.Property("createddate", th.DateTimeType),
         th.Property("externalid", th.StringType),
+        th.Property("custitem_volume_cm3", th.NumberType),
     ]
 
     def get_child_context(self, record, context) -> dict:
