@@ -64,17 +64,14 @@ tap-netsuite-rest --config CONFIG --discover > ./catalog.json
 
 ### Assembly BOM components
 
-The `assembly_bom_components` stream returns the active current BOM revision
-at one row per assembly/component-item pair. Repeated NetSuite component lines
-are summed, while `sourcelines` reports how many lines contributed to the row.
-The stream also includes the Mitari item UOM fields and the current revision's
-last-modified timestamp.
+The `assembly_bom_components` stream returns one row per assembly that has at
+least one component in its active current BOM revision. It exposes only the
+assembly ID as `id` and `parentitem`, which is the Product classification
+contract consumed by the Mitari ETL. `DISTINCT` removes duplicate parents.
 
 The stream intentionally uses `FULL_TABLE` replication. Neither
 `assemblyitembom` nor `bomrevisioncomponentmember` exposes a change marker that
-covers assignments, component edits, and deletions. The
-`revisionlastmodifieddate` field is informational and must not be configured as
-a Singer replication key.
+covers assignments, component edits, and deletions.
 
 ### Item volume
 

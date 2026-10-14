@@ -2951,7 +2951,7 @@ class SalesOrderLinesStream(NetsuiteDynamicStream):
         return super().prepare_request_payload(context, next_page_token)
 
 class AssemblyBomComponentsStream(NetsuiteDynamicStream):
-    """Current assembly BOM components, grouped to product-composition grain."""
+    """Assemblies with at least one component in their active current BOM."""
 
     name = "assembly_bom_components"
     table = "assemblyitembom"
@@ -2959,72 +2959,23 @@ class AssemblyBomComponentsStream(NetsuiteDynamicStream):
     primary_keys = ["id"]
     replication_key = None
     select = """
-        CONCAT(CONCAT(a.assembly, '_'), c.item) AS id,
-        a.assembly AS parentitem,
-        parent.itemid AS parentitemname,
-        parent.custitem_item_uom AS parentitemuomid,
-        BUILTIN.DF(parent.custitem_item_uom) AS parentitemuom,
-        c.item AS item,
-        component.itemid AS itemname,
-        component.itemtype AS itemtype,
-        component.custitem_item_uom AS itemuomid,
-        BUILTIN.DF(component.custitem_item_uom) AS itemuom,
-        SUM(c.quantity) AS quantity,
-        SUM(c.bomquantity) AS bomquantity,
-        a.billofmaterials,
-        b.name AS bomname,
-        a.currentrevision,
-        r.name AS revisionname,
-        TO_CHAR(r.lastmodifieddate, 'YYYY-MM-DD HH24:MI:SS')
-            AS revisionlastmodifieddate,
-        COUNT(*) AS sourcelines
+        DISTINCT
+        a.assembly AS id,
+        a.assembly AS parentitem
     """
     join = """
         INNER JOIN bom b ON b.id = a.billofmaterials
         INNER JOIN bomrevision r ON r.id = a.currentrevision
         INNER JOIN bomrevisioncomponentmember c ON c.bomrevision = r.id
-        LEFT JOIN item parent ON parent.id = a.assembly
-        LEFT JOIN item component ON component.id = c.item
     """
     custom_filter = (
         "a.inactive = 'No' AND b.isinactive = 'F' AND r.isinactive = 'F'"
     )
-    group_by = """
-        GROUP BY
-            a.assembly,
-            c.item,
-            parent.itemid,
-            parent.custitem_item_uom,
-            component.itemid,
-            component.itemtype,
-            component.custitem_item_uom,
-            a.billofmaterials,
-            b.name,
-            a.currentrevision,
-            r.name,
-            r.lastmodifieddate
-    """
-    order_by = "ORDER BY a.assembly, c.item"
+    order_by = "ORDER BY a.assembly"
 
     schema = th.PropertiesList(
         th.Property("id", th.StringType),
         th.Property("parentitem", th.StringType),
-        th.Property("parentitemname", th.StringType),
-        th.Property("parentitemuomid", th.StringType),
-        th.Property("parentitemuom", th.StringType),
-        th.Property("item", th.StringType),
-        th.Property("itemname", th.StringType),
-        th.Property("itemtype", th.StringType),
-        th.Property("itemuomid", th.StringType),
-        th.Property("itemuom", th.StringType),
-        th.Property("quantity", th.NumberType),
-        th.Property("bomquantity", th.NumberType),
-        th.Property("billofmaterials", th.StringType),
-        th.Property("bomname", th.StringType),
-        th.Property("currentrevision", th.StringType),
-        th.Property("revisionname", th.StringType),
-        th.Property("revisionlastmodifieddate", th.DateTimeType),
-        th.Property("sourcelines", th.IntegerType),
     ).to_dict()
 
 
