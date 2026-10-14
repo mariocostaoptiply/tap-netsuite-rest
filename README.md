@@ -76,6 +76,12 @@ covers assignments, component edits, and deletions. The
 `revisionlastmodifieddate` field is informational and must not be configured as
 a Singer replication key.
 
+### Item volume
+
+The `item` stream exposes Mitari's `custitem_volume_cm3` custom field as a
+number. Rediscover and reselect the stream to add the field to an existing
+catalog.
+
 ## Developer Resources
 
 - [ ] `Developer TODO:` As a first step, scan the entire project for the text "`TODO:`" and complete any recommended steps, deleting the "TODO" references once completed.
