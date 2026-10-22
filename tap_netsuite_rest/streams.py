@@ -671,10 +671,15 @@ class InventoryItemLocationsStream(NetSuiteStream):
     name = "inventory_item_locations"
     primary_keys = []
     table = "inventoryitemlocations"
-    replication_key = "lastquantityavailablechange"
+    replication_key = "lastmodifieddate"
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
+        if self.stream_state.get("replication_key") not in (None, self.replication_key):
+            raise FatalAPIError(
+                "Outdated inventory_item_locations bookmark. Remove only this stream's "
+                "bookmark before syncing to backfill inventory with lastmodifieddate."
+            )
         force_sync_inventory = (
             self._tap.force_sync_inventory
             or self.config.get("force_sync_inventory", False)
@@ -716,6 +721,18 @@ class InventoryItemLocationsStream(NetSuiteStream):
             return
         super()._increment_stream_state(latest_record, context=context)
 
+    def apply_catalog(self, catalog):
+        super().apply_catalog(catalog)
+        selected_properties = self.get_selected_properties()
+        if self.replication_key != type(self).replication_key or (
+            selected_properties
+            and self.format_date_query("lastmodifieddate") not in selected_properties
+        ):
+            raise FatalAPIError(
+                "Outdated inventory_item_locations catalog. Run rediscovery and select "
+                "lastmodifieddate before syncing."
+            )
+
     @property
     def custom_filter(self):
         return self._custom_filter
@@ -730,7 +747,7 @@ class InventoryItemLocationsStream(NetSuiteStream):
         th.Property("costaccountingstatus", th.StringType),
         th.Property("item", th.StringType),
         th.Property("lastpurchasepricemli", th.StringType),
-        th.Property("lastquantityavailablechange", th.DateTimeType),
+        th.Property("lastmodifieddate", th.DateTimeType),
         th.Property("location", th.StringType),
         th.Property("onhandvaluemli", th.StringType),
         th.Property("quantityavailable", th.StringType),

@@ -7,6 +7,7 @@ from urllib.parse import parse_qs, urlsplit
 
 import pytest
 import requests
+from hotglue_singer_sdk.exceptions import FatalAPIError
 
 from tap_netsuite_rest.streams import InventoryItemLocationsStream
 from tap_netsuite_rest.tap import TapNetSuite
@@ -22,26 +23,26 @@ CONFIG = {
 }
 BOOKMARKS = {
     "inventory_item_locations": {
-        "replication_key": "lastquantityavailablechange",
+        "replication_key": "lastmodifieddate",
         "replication_key_value": "2026-10-01 00:00:00",
     },
     "item": {"replication_key": "lastmodifieddate", "replication_key_value": "2026-09-01"},
 }
 SOURCE = [
     {"item": "1", "location": "113", "quantityavailable": "3", "reorderpoint": "1",
-     "lastquantityavailablechange": "2026-10-05 00:00:00"},
+     "lastmodifieddate": "2026-10-05 00:00:00"},
     {"item": "2", "location": "113", "quantityavailable": "7", "reorderpoint": "0",
-     "lastquantityavailablechange": "2001-01-01 00:00:00"},
+     "lastmodifieddate": "2001-01-01 00:00:00"},
     {"item": "3", "location": "113", "quantityavailable": "0", "reorderpoint": "0",
-     "lastquantityavailablechange": None},
+     "lastmodifieddate": None},
     {"item": "42366", "location": "113", "quantityavailable": "0", "reorderpoint": "0"},
     {"item": "42366", "location": "114", "quantityavailable": "9", "reorderpoint": "2",
-     "lastquantityavailablechange": "2002-01-01 00:00:00"},
+     "lastmodifieddate": "2002-01-01 00:00:00"},
     {"item": "99999", "location": "113", "quantityavailable": "4", "reorderpoint": "0",
-     "lastquantityavailablechange": "2003-01-01 00:00:00"},
+     "lastmodifieddate": "2003-01-01 00:00:00"},
     {"item": "100000", "location": "113", "quantityavailable": "0", "reorderpoint": "0"},
     {"item": "105000", "location": "113", "quantityavailable": "-2", "reorderpoint": "3",
-     "lastquantityavailablechange": "2026-10-06 00:00:00"},
+     "lastmodifieddate": "2026-10-06 00:00:00"},
 ]
 
 SPARSE_SOURCE = [
@@ -58,13 +59,13 @@ def no_network():
         yield
 
 
-def make_tap(state, config=None):
-    catalog = {"streams": [{
+def make_tap(state, config=None, catalog=None):
+    catalog = catalog or {"streams": [{
         "tap_stream_id": "inventory_item_locations",
         "stream": "inventory_item_locations",
         "schema": deepcopy(InventoryItemLocationsStream.schema),
         "key_properties": [],
-        "replication_key": "lastquantityavailablechange",
+        "replication_key": "lastmodifieddate",
         "replication_method": "INCREMENTAL",
         "metadata": [{"breadcrumb": [], "metadata": {"selected": True}}],
     }]}
@@ -83,11 +84,11 @@ def source_response(request, **kwargs):
         lower, upper = item_range.groups()
         rows = [row for row in rows if int(row["item"]) >= int(lower)
                 and (upper is None or int(row["item"]) < int(upper))]
-    cutoff = re.search(r"lastquantityavailablechange>TO_TIMESTAMP\('([^']+)'", query)
+    cutoff = re.search(r"(lastmodifieddate|lastquantityavailablechange)>TO_TIMESTAMP\('([^']+)'", query)
     if cutoff:
-        rows = [row for row in rows if row.get("lastquantityavailablechange")
-                and row["lastquantityavailablechange"] > cutoff.group(1)]
-        rows.sort(key=lambda row: row["lastquantityavailablechange"])
+        field, timestamp = cutoff.groups()
+        rows = [row for row in rows if row.get(field) and row[field] > timestamp]
+        rows.sort(key=lambda row: row[field])
     else:
         rows.sort(key=lambda row: (int(row["item"]), int(row["location"])))
     params = parse_qs(urlsplit(request.url).query)
@@ -191,7 +192,7 @@ def test_missing_inventory_bookmark_ignores_start_date(capsys):
     assert inventory_values(records) == inventory_values(SOURCE)
     assert stream.replication_method == "INCREMENTAL"
     assert tap.state["bookmarks"]["inventory_item_locations"] == {
-        "replication_key": "lastquantityavailablechange",
+        "replication_key": "lastmodifieddate",
         "replication_key_value": "2026-10-06 00:00:00",
     }
 
@@ -249,3 +250,73 @@ def test_forced_batch_rejects_results_above_suiteql_cap():
     }).encode()
     with pytest.raises(Exception, match="totalResults is greater than"):
         stream.get_next_page_token(response, None)
+
+
+@pytest.mark.parametrize("available_timestamp", ["2001-01-01 00:00:00", None])
+def test_inventory_changes_resume_independently_of_availability_timestamp(
+    available_timestamp, capsys,
+):
+    row = {
+        "item": "42", "location": "113", "quantityavailable": "0",
+        "quantitybackordered": "5", "reorderpoint": "0",
+        "lastquantityavailablechange": available_timestamp,
+        "lastmodifieddate": "2026-10-05 00:00:00",
+    }
+    state = {"bookmarks": deepcopy(BOOKMARKS)}
+    transitions = [
+        ("2026-10-05 00:00:00", "0", "5"),
+        ("2026-10-06 00:00:00", "0", "0"),
+        ("2026-10-07 00:00:00", "3", "0"),
+        ("2026-10-08 00:00:00", "1", "0"),
+    ]
+    for timestamp, available, backordered in transitions:
+        row.update(
+            lastmodifieddate=timestamp,
+            quantityavailable=available,
+            quantitybackordered=backordered,
+        )
+        with patch(__name__ + ".SOURCE", [row]):
+            tap, _ = make_tap(state)
+            records = sync_records(tap, capsys)
+        assert [
+            (record["item"], record["location"], record["quantityavailable"],
+             record["quantitybackordered"])
+            for record in records
+        ] == [("42", "113", available, backordered)]
+        assert tap.state["bookmarks"]["inventory_item_locations"] == {
+            "replication_key": "lastmodifieddate", "replication_key_value": timestamp,
+        }
+        assert tap.state["bookmarks"]["item"] == BOOKMARKS["item"]
+        state = deepcopy(tap.state)
+
+    with patch(__name__ + ".SOURCE", [row]):
+        tap, _ = make_tap(state)
+        assert sync_records(tap, capsys) == []
+
+
+@pytest.mark.parametrize("force", [False, True])
+def test_legacy_inventory_bookmark_requires_explicit_backfill(force):
+    state = {"force_sync_inventory": force, "bookmarks": deepcopy(BOOKMARKS)}
+    state["bookmarks"]["inventory_item_locations"]["replication_key"] = (
+        "lastquantityavailablechange"
+    )
+    original = deepcopy(state)
+    with pytest.raises(FatalAPIError, match="Outdated inventory_item_locations bookmark"):
+        make_tap(state)
+    assert state == original
+
+
+@pytest.mark.parametrize("legacy_key", [False, True])
+def test_stale_inventory_catalog_cannot_silently_keep_old_extraction(legacy_key):
+    tap, _ = make_tap({"bookmarks": deepcopy(BOOKMARKS)})
+    catalog = tap.input_catalog.to_dict()
+    entry = catalog["streams"][0]
+    if legacy_key:
+        entry["replication_key"] = "lastquantityavailablechange"
+    else:
+        entry["metadata"].append({
+            "breadcrumb": ["properties", "quantityavailable"],
+            "metadata": {"selected": True},
+        })
+    with pytest.raises(FatalAPIError, match="Run rediscovery and select lastmodifieddate"):
+        make_tap({"bookmarks": deepcopy(BOOKMARKS)}, catalog=catalog)

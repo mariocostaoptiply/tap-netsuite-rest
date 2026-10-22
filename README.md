@@ -25,22 +25,35 @@ tap is available by running:
 tap-netsuite-rest --about
 ```
 
-### Inventory Location Reorder Point
+### Inventory Location Stock and Reorder Point
 
 The `inventory_item_locations` stream exposes NetSuite's location-specific
 `reorderpoint` as a nullable string. Rediscover the catalog and select this field
 to include `inventoryitemlocations.reorderpoint` in the SuiteQL query. An omitted
 value is not the same as `"0"`.
 
-The replication key remains `lastquantityavailablechange`; this addition does
-not guarantee extraction of reorder-point-only changes.
+The replication key is `inventoryitemlocations.lastmodifieddate`, not
+`lastquantityavailablechange`. Backorder-only changes with a newer modification
+timestamp are extracted even when the availability timestamp is old or null.
+The `item` stream and its bookmark are unchanged.
 
-To rebuild this stream, remove only the `inventory_item_locations` bookmark
-from Singer state. The next sync scans every item range without applying
-`start_date`, emits rows whose replication key is null, and rebuilds the
-bookmark from the greatest non-null `lastquantityavailablechange`.
-Range scans use deterministic `item, location` ordering so tied
-`lastquantityavailablechange` values cannot move records between offset pages.
+To migrate an existing job:
+
+1. Rediscover the catalog and select `lastmodifieddate` alongside the required
+   inventory quantities and any existing reorder-point selection.
+2. Remove only the `inventory_item_locations` bookmark from Singer state.
+3. Run the next sync. It scans every item range without applying `start_date`,
+   emits rows whose replication key is null, and rebuilds the inventory bookmark
+   from the greatest non-null `lastmodifieddate`. Subsequent runs are incremental.
+
+Old inventory bookmarks and catalogs using `lastquantityavailablechange` are
+rejected before extraction. A catalog projecting specific fields must include
+`lastmodifieddate`; otherwise the tap requires rediscovery and selection.
+The `force_sync_inventory` override preserves bookmarks, so it is not a
+substitute for resetting the old inventory bookmark during this migration.
+
+Range scans use deterministic `item, location` ordering so tied modification
+timestamps cannot move records between offset pages.
 They also filter `quantityavailable IS NOT NULL` before pagination. NetSuite can
 otherwise report totals that include rows omitted from pages when this calculated
 field is selected, causing fixed offsets to skip valid inventory rows.
