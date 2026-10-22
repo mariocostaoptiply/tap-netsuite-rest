@@ -115,6 +115,18 @@ class TapNetSuite(Tap):
         self.soap_client = NetsuiteSOAPClient(self.config, self.logger)
     
 
+    @property
+    def catalog(self):
+        catalog = super().catalog
+        item = catalog.get("item")
+        if item and item.schema.properties:
+            field = item.schema.properties.get("custitem_magento_stock_update")
+            if field is not None:
+                # Normalize saved catalogs before the SDK mapper snapshots their schema.
+                field.type = ["string", "null"]
+                field.format = None
+        return catalog
+
     def load_state(self, state):
         super().load_state(state)
         self.force_sync_inventory = state.get("force_sync_inventory", False)

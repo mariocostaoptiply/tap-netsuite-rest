@@ -92,6 +92,14 @@ The `item` stream exposes Mitari's `custitem_volume_cm3` custom field as a
 number. Rediscover and reselect the stream to add the field to an existing
 catalog.
 
+### Item Magento stock update
+
+When present, `item.custitem_magento_stock_update` is always a nullable string
+(`{"type": ["string", "null"]}`) without a `format`. This applies to both fresh
+discovery and saved catalogs, including the emitted Singer schema. SuiteQL
+selects the field directly rather than applying `TO_CHAR`, which NetSuite
+rejects for this field. Existing catalog files do not need manual edits.
+
 ## Developer Resources
 
 - [ ] `Developer TODO:` As a first step, scan the entire project for the text "`TODO:`" and complete any recommended steps, deleting the "TODO" references once completed.

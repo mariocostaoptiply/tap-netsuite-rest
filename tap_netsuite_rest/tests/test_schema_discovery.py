@@ -9,7 +9,7 @@ from hotglue_singer_sdk.exceptions import FatalAPIError, RetriableAPIError
 from hotglue_etl_exceptions import InvalidCredentialsError
 from jsonschema import validate
 
-from tap_netsuite_rest.streams import InvoicesStream, SalesOrdersStream, SalesOrderLinesStream
+from tap_netsuite_rest.streams import InvoicesStream, ItemStream, SalesOrdersStream, SalesOrderLinesStream
 from tap_netsuite_rest.tap import TapNetSuite
 
 CONFIG = {
@@ -233,3 +233,76 @@ def test_mixed_transient_failures_share_request_attempt_budget(statuses):
         with pytest.raises(RetriableAPIError):
             SalesOrdersStream(TapNetSuite(config=CONFIG))
     assert len(attempts) == len(statuses)
+
+
+@pytest.mark.parametrize("source", ["catalog", "metadata", "sample"])
+@pytest.mark.parametrize("include_field", [True, False])
+def test_item_stock_update_is_nullable_text(source, include_field, capsys):
+    field = "custitem_magento_stock_update"
+    config = {**CONFIG, "start_date": "2026-08-01T00:00:00Z"}
+    properties = {
+        "id": {"type": ["string", "null"]},
+        "lastmodifieddate": {"type": ["string", "null"], "format": "date-time"},
+    }
+    sample = {"id": "42", "lastmodifieddate": "2026-08-02 12:00:00"}
+    if include_field:
+        properties[field] = {"type": ["string", "null"], "format": "date-time"}
+        sample[field] = "2026-08-02 11:30:00"
+    catalog = {"streams": [{
+        "tap_stream_id": "item",
+        "stream": "item",
+        "schema": {"type": "object", "properties": properties},
+        "key_properties": ["id", "lastmodifieddate"],
+        "replication_key": "lastmodifieddate",
+        "replication_method": "INCREMENTAL",
+        "metadata": [{"breadcrumb": [], "metadata": {"selected": True}}],
+    }]}
+    original = json.dumps(catalog, sort_keys=True)
+    replies = []
+    if source == "metadata":
+        replies = [response({"properties": {
+            name: {**schema, "type": "string"}
+            for name, schema in properties.items()
+        }})]
+    elif source == "sample":
+        replies = [response({}, 404), response({"items": [sample]})]
+
+    with patch("tap_netsuite_rest.tap.include_streams", ["ItemStream"]), \
+            patch.object(ItemStream, "date_fields", []), \
+            patch("requests.sessions.Session.send", side_effect=replies):
+        tap = TapNetSuite(config=config, catalog=catalog if source == "catalog" else None)
+        discovered = json.loads(tap.run_discovery())
+        schema = discovered["streams"][0]["schema"]
+        assert json.dumps(catalog, sort_keys=True) == original
+        assert schema["properties"]["lastmodifieddate"]["format"] == "date-time"
+        if include_field:
+            assert schema["properties"][field] == {"type": ["string", "null"]}
+            validate({"id": "42", field: "not a date"}, schema)
+            validate({"id": "42", field: None}, schema)
+        else:
+            assert field not in schema["properties"]
+
+        selected_catalog = catalog if source == "catalog" else discovered
+        selected_catalog["streams"][0]["metadata"] = [
+            {"breadcrumb": [], "metadata": {"selected": True}},
+            *[{"breadcrumb": ["properties", name], "metadata": {"selected": True}}
+              for name in schema["properties"]],
+        ]
+        stream = TapNetSuite(config=config, catalog=selected_catalog).streams["item"]
+        capsys.readouterr()
+        stream._write_schema_message()
+        emitted_schema = json.loads(capsys.readouterr().out)["schema"]
+        if include_field:
+            assert emitted_schema["properties"][field] == {"type": ["string", "null"]}
+        else:
+            assert field not in emitted_schema["properties"]
+        query = stream.prepare_request_payload(None, None)["q"]
+        assert stream.format_date_query("lastmodifieddate") in query
+        if include_field:
+            assert f"item.{field} AS {field}" in query
+            assert f"TO_CHAR (item.{field}," not in query
+            for value in ("2026-08-02 11:30:00", None):
+                assert stream.post_process({"id": "42", field: value}, None)[field] == value
+        else:
+            assert field not in query
+    capsys.readouterr()

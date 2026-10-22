@@ -631,6 +631,17 @@ class ItemStream(BulkParentStream):
         th.Property("custitem_volume_cm3", th.NumberType),
     ]
 
+    @property
+    def schema(self):
+        schema = super().schema
+        if "custitem_magento_stock_update" in schema["properties"]:
+            schema = deepcopy(schema)
+            field = schema["properties"]["custitem_magento_stock_update"]
+            # SuiteQL rejects TO_CHAR on this field even when its text looks like a date.
+            field["type"] = ["string", "null"]
+            field.pop("format", None)
+        return schema
+
     def get_child_context(self, record, context) -> dict:
         return {"ids": [record["id"]]}
 
