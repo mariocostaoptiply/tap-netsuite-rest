@@ -94,6 +94,16 @@ class TapNetSuite(Tap):
         th.Property("bill_attachments_restlet_url", th.StringType, description="Base URL for bill attachments Restlet"),
         th.Property("bill_attachments_suitelet_url", th.StringType, description="Base URL for bill attachments Suitelet (file download)"),
         th.Property(
+            "vendor_transaction_contact",
+            th.BooleanType,
+            default=False,
+            description=(
+                "Add the latest usable PO contact as vendor.transaction_contact_id "
+                "and refresh vendors in full on every run. Requires the "
+                "custbody_transaction_contact transaction field."
+            ),
+        ),
+        th.Property(
             "remove_unauthorized_streams",
             th.BooleanType,
             default=True,

@@ -370,6 +370,69 @@ class VendorStream(BulkParentStream):
         th.Property("defaultbillingaddress", th.StringType)
     ]
 
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        if self.config.get("vendor_transaction_contact", False):
+            self.join += """
+                LEFT JOIN (
+                    SELECT po.entity AS supplier_id,
+                           po.custbody_transaction_contact AS contact_id,
+                           ROW_NUMBER() OVER (
+                               PARTITION BY po.entity
+                               ORDER BY po.createddate DESC, po.id DESC
+                           ) AS contact_rank
+                    FROM transaction po
+                    INNER JOIN CompanyContactRelationship relationship
+                        ON relationship.company = po.entity
+                       AND relationship.contact = po.custbody_transaction_contact
+                    INNER JOIN contact c
+                        ON c.id = relationship.contact AND c.isinactive = 'F'
+                    WHERE po.type = 'PurchOrd'
+                      AND po.custbody_transaction_contact IS NOT NULL
+                ) latest_contact
+                    ON latest_contact.supplier_id = v.id
+                   AND latest_contact.contact_rank = 1
+            """
+            self._select += ", latest_contact.contact_id AS transaction_contact_id"
+            # PO contact changes do not update the vendor's incremental bookmark.
+            self.replication_key = None
+            self.replication_key_prefix = None
+            self.order_by = "ORDER BY v.id, vsr.subsidiary"
+
+    @property
+    def replication_method(self):
+        if self.config.get("vendor_transaction_contact", False):
+            return "FULL_TABLE"
+        return super().replication_method
+
+    @property
+    def schema(self):
+        schema = super().schema
+        if self.config.get("vendor_transaction_contact", False):
+            schema = deepcopy(schema)
+            schema["properties"]["transaction_contact_id"] = {
+                "type": ["string", "null"]
+            }
+        return schema
+
+    def get_selected_properties(self, select_all_by_default=False):
+        properties = super().get_selected_properties(select_all_by_default)
+        properties = [
+            field for field in properties
+            if field != "v.transaction_contact_id AS transaction_contact_id"
+        ]
+        if self.config.get("vendor_transaction_contact", False):
+            properties.append(
+                "latest_contact.contact_id AS transaction_contact_id"
+            )
+        return properties
+
+    def post_process(self, row, context):
+        row = super().post_process(row, context)
+        if self.config.get("vendor_transaction_contact", False):
+            row.setdefault("transaction_contact_id", None)
+        return row
+
     def get_child_context(self, record, context) -> dict:
         address_keys = ["defaultbillingaddress", "defaultshippingaddress"]
         # Collect valid address IDs

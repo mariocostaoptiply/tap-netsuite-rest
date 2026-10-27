@@ -100,6 +100,31 @@ discovery and saved catalogs, including the emitted Singer schema. SuiteQL
 selects the field directly rather than applying `TO_CHAR`, which NetSuite
 rejects for this field. Existing catalog files do not need manual edits.
 
+### Vendor transaction contact
+
+Set `"vendor_transaction_contact": true` to add nullable string
+`transaction_contact_id` to the `vendor` stream. This requires the account-specific
+PO field `custbody_transaction_contact` and read access to transactions, contacts,
+and `CompanyContactRelationship`. The option defaults to `false`.
+
+For each supplier, the stream uses the contact on its most recently created
+purchase order with a populated contact that is still active and linked to that
+supplier. Creation-date ties use the highest PO ID. Suppliers with no usable
+contact remain in the stream with `transaction_contact_id: null`; no contact is
+guessed from the supplier's contact list.
+
+When enabled, vendor replication is `FULL_TABLE`, including with an existing
+incremental catalog and bookmark: changing a PO contact need not modify the
+vendor's `lastmodifieddate`. Each run rereads vendors and ranks their PO history;
+offset pages use `v.id, vsr.subsidiary` ordering. Other streams and the default
+vendor incremental mode are unchanged.
+
+The tap adds the field to both discovered and supplied schemas. Rediscover before
+syncing if downstream tooling pins its own catalog. The import ETL must preserve
+the field in the supplier snapshot, and the export ETL must read that snapshot
+before mapping it to `custbody_transaction_contact`; this option changes extraction
+only and does not create a purchase order or configure either ETL.
+
 ## Developer Resources
 
 - [ ] `Developer TODO:` As a first step, scan the entire project for the text "`TODO:`" and complete any recommended steps, deleting the "TODO" references once completed.
