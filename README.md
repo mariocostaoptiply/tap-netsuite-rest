@@ -109,9 +109,11 @@ and `CompanyContactRelationship`. The option defaults to `false`.
 
 For each supplier, the stream uses the contact on its most recently created
 purchase order with a populated contact that is still active and linked to that
-supplier. Creation-date ties use the highest PO ID. Suppliers with no usable
-contact remain in the stream with `transaction_contact_id: null`; no contact is
-guessed from the supplier's contact list.
+supplier. Creation-date ties use the highest PO ID. If no usable PO contact exists,
+the stream falls back to the supplier's only active linked contact. Repeated
+relationship rows for the same contact count once. With no active linked contact,
+or multiple active contacts and no usable PO history, `transaction_contact_id`
+remains `null`; the stream never picks an arbitrary contact or a primary role.
 
 When enabled, vendor replication is `FULL_TABLE`, including with an existing
 incremental catalog and bookmark: changing a PO contact need not modify the

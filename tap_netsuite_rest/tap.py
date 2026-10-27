@@ -98,8 +98,9 @@ class TapNetSuite(Tap):
             th.BooleanType,
             default=False,
             description=(
-                "Add the latest usable PO contact as vendor.transaction_contact_id "
-                "and refresh vendors in full on every run. Requires the "
+                "Add vendor.transaction_contact_id from the latest usable PO, "
+                "falling back to the only active linked contact, and refresh "
+                "vendors in full on every run. Requires the "
                 "custbody_transaction_contact transaction field."
             ),
         ),

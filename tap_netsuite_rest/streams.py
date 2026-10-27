@@ -392,8 +392,20 @@ class VendorStream(BulkParentStream):
                 ) latest_contact
                     ON latest_contact.supplier_id = v.id
                    AND latest_contact.contact_rank = 1
+                LEFT JOIN (
+                    SELECT relationship.company AS supplier_id,
+                           MIN(relationship.contact) AS contact_id
+                    FROM CompanyContactRelationship relationship
+                    INNER JOIN contact c
+                        ON c.id = relationship.contact AND c.isinactive = 'F'
+                    GROUP BY relationship.company
+                    HAVING COUNT(DISTINCT relationship.contact) = 1
+                ) sole_contact ON sole_contact.supplier_id = v.id
             """
-            self._select += ", latest_contact.contact_id AS transaction_contact_id"
+            self.append_select = (
+                "COALESCE(latest_contact.contact_id, sole_contact.contact_id) "
+                "AS transaction_contact_id, "
+            )
             # PO contact changes do not update the vendor's incremental bookmark.
             self.replication_key = None
             self.replication_key_prefix = None
@@ -421,10 +433,6 @@ class VendorStream(BulkParentStream):
             field for field in properties
             if field != "v.transaction_contact_id AS transaction_contact_id"
         ]
-        if self.config.get("vendor_transaction_contact", False):
-            properties.append(
-                "latest_contact.contact_id AS transaction_contact_id"
-            )
         return properties
 
     def post_process(self, row, context):

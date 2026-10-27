@@ -47,7 +47,7 @@ def make_stream(enabled=False, catalog=None, state=None):
     ))
 
 
-def test_vendor_contact_uses_latest_usable_po_without_cross_supplier_leaks():
+def test_vendor_contact_uses_latest_po_then_unique_active_contact():
     stream = make_stream(enabled=True)
     query = stream.prepare_request_payload(None, None)["q"]
     with sqlite3.connect(":memory:") as db:
@@ -65,15 +65,20 @@ def test_vendor_contact_uses_latest_usable_po_without_cross_supplier_leaks():
             INSERT INTO vendor VALUES
                 (101, NULL, '2026-01-01'), (102, NULL, '2026-01-01'),
                 (103, NULL, '2026-01-01'), (104, NULL, '2026-01-01'),
-                (105, NULL, '2026-01-01');
+                (105, NULL, '2026-01-01'), (106, NULL, '2026-01-01'),
+                (107, NULL, '2026-01-01'), (108, NULL, '2026-01-01'),
+                (109, NULL, '2026-01-01');
             INSERT INTO vendorsubsidiaryrelationship VALUES
-                (101, 1), (102, 1), (103, 1), (104, 1), (105, 1);
+                (101, 1), (102, 1), (103, 1), (104, 1), (105, 1),
+                (106, 1), (107, 1), (108, 1), (109, 1);
             INSERT INTO contact VALUES
                 (11, 'F'), (12, 'F'), (13, 'T'), (21, 'F'), (22, 'F'),
-                (43, 'T'), (51, 'F');
+                (43, 'T'), (51, 'F'), (61, 'F'), (62, 'T'), (71, 'F'),
+                (72, 'F'), (91, 'F'), (92, 'T');
             INSERT INTO CompanyContactRelationship VALUES
                 (101, 11), (101, 12), (101, 13), (102, 21), (102, 22),
-                (102, 22), (104, 43), (105, 51);
+                (102, 22), (104, 43), (105, 51), (106, 61), (106, 61),
+                (106, 62), (107, 71), (107, 72), (109, 91), (109, 92);
             INSERT INTO "transaction" VALUES
                 (1001, 101, 'PurchOrd', '2026-10-01', 11),
                 (1002, 101, 'PurchOrd', '2026-10-02', 12),
@@ -84,13 +89,16 @@ def test_vendor_contact_uses_latest_usable_po_without_cross_supplier_leaks():
                 (2001, 102, 'PurchOrd', '2026-10-03', 21),
                 (2002, 102, 'PurchOrd', '2026-10-03', 22),
                 (4001, 104, 'PurchOrd', '2026-10-03', 43),
-                (5001, 105, 'SalesOrd', '2026-10-03', 51);
+                (5001, 105, 'SalesOrd', '2026-10-03', 51),
+                (8001, 108, 'PurchOrd', '2026-10-03', 61),
+                (9001, 109, 'PurchOrd', '2026-10-03', 92);
         """)
         # SQLite reserves TRANSACTION; only quote that table name for the offline engine.
         rows = db.execute(query.replace("FROM transaction po", 'FROM "transaction" po')).fetchall()
 
     assert [(row["id"], row["transaction_contact_id"]) for row in rows] == [
-        (101, 12), (102, 22), (103, None), (104, None), (105, None)
+        (101, 12), (102, 22), (103, None), (104, None), (105, 51),
+        (106, 61), (107, None), (108, None), (109, 91)
     ]
     processed = stream.post_process(dict(rows[0]), None)
     assert processed["transaction_contact_id"] == "12"
